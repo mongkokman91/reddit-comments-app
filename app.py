@@ -450,4 +450,3 @@ if submitted:
     except Exception as exc:
         status.error("The extraction stopped because of an error.")
         st.exception(exc)
-Oldest chats
