@@ -1006,7 +1006,7 @@ delay = st.number_input(
     "Delay between requests (seconds)",
     min_value=0.0,
     max_value=10.0,
-    value=1.0,
+    value=0.0,
     step=0.5,
 )
 
