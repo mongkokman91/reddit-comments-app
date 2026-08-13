@@ -1027,7 +1027,7 @@ if mode == "Subreddit extraction":
                 "Comments per subreddit",
                 min_value=1,
                 max_value=100000,
-                value=5000,
+                value=1000,
                 step=100,
             )
         )
@@ -1051,6 +1051,7 @@ if mode == "Subreddit extraction":
                 "Lowest score",
                 "Random",
             ],
+            index=2,
         )
 
         submitted = (
