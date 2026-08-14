@@ -42,42 +42,16 @@ REDDIT_SUBREDDIT_AUTOCOMPLETE_URL = (
     "https://www.reddit.com/api/subreddit_autocomplete_v2.json"
 )
 
+REDDIT_SUBREDDIT_SEARCH_URL = (
+    "https://www.reddit.com/subreddits/search.json"
+)
 
-@st.cache_data(ttl=300, show_spinner=False)
-def live_subreddit_suggestions(searchterm):
-    query = (searchterm or "").strip().removeprefix("r/")
+REDDIT_SUBREDDIT_NAMES_URL = (
+    "https://www.reddit.com/api/search_reddit_names.json"
+)
 
-    if len(query) < 2:
-        return []
 
-    try:
-        response = requests.get(
-            REDDIT_SUBREDDIT_AUTOCOMPLETE_URL,
-            params={
-                "query": query,
-                "include_over_18": "on",
-                "include_profiles": "off",
-                "raw_json": 1,
-            },
-            headers={
-                "User-Agent": (
-                    "Private Streamlit Reddit "
-                    "research extractor/2.1"
-                )
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
-        return []
-
-    children = (
-        payload.get("data", {}).get("children", [])
-        if isinstance(payload, dict)
-        else []
-    )
-
+def _subreddit_suggestion_rows(children):
     suggestions = []
     seen = set()
 
@@ -104,6 +78,109 @@ def live_subreddit_suggestions(searchterm):
         suggestions.append((label, name))
 
     return suggestions[:20]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def live_subreddit_suggestions(searchterm):
+    query = (searchterm or "").strip().removeprefix("r/")
+
+    if len(query) < 2:
+        return []
+
+    headers = {
+        "User-Agent": (
+            "Private Streamlit Reddit "
+            "research extractor/2.2"
+        ),
+        "Accept": "application/json",
+    }
+    errors = []
+
+    try:
+        response = requests.get(
+            REDDIT_SUBREDDIT_AUTOCOMPLETE_URL,
+            params={
+                "query": query,
+                "include_over_18": "on",
+                "include_profiles": "off",
+                "raw_json": 1,
+            },
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        suggestions = _subreddit_suggestion_rows(
+            payload.get("data", {}).get("children", [])
+        )
+        if suggestions:
+            return suggestions
+        errors.append("autocomplete returned 0")
+    except Exception as exc:
+        errors.append(
+            f"autocomplete {type(exc).__name__}"
+        )
+
+    try:
+        response = requests.get(
+            REDDIT_SUBREDDIT_SEARCH_URL,
+            params={
+                "q": query,
+                "limit": 20,
+                "raw_json": 1,
+            },
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        suggestions = _subreddit_suggestion_rows(
+            payload.get("data", {}).get("children", [])
+        )
+        if suggestions:
+            return suggestions
+        errors.append("search returned 0")
+    except Exception as exc:
+        errors.append(
+            f"search {type(exc).__name__}"
+        )
+
+    try:
+        response = requests.post(
+            REDDIT_SUBREDDIT_NAMES_URL,
+            data={
+                "query": query,
+                "exact": "false",
+                "include_over_18": "on",
+            },
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        names = (
+            payload.get("names", [])
+            if isinstance(payload, dict)
+            else []
+        )
+        suggestions = [
+            (f"r/{name}", name)
+            for name in names
+            if str(name).strip()
+        ][:20]
+        if suggestions:
+            return suggestions
+        errors.append("name search returned 0")
+    except Exception as exc:
+        errors.append(
+            f"name search {type(exc).__name__}"
+        )
+
+    diagnostic = "; ".join(errors)
+    return [(
+        f"No live matches for '{query}' ({diagnostic})",
+        "",
+    )]
 
 
 def parse_csv(value):
