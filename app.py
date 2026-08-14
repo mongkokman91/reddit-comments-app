@@ -8,6 +8,7 @@ import requests
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
+from streamlit_searchbox import st_searchbox
 
 
 st.set_page_config(
@@ -36,6 +37,73 @@ PULLPUSH_COMMENTS_URL = (
 PULLPUSH_POSTS_URL = (
     "https://api.pullpush.io/reddit/search/submission/"
 )
+
+REDDIT_SUBREDDIT_AUTOCOMPLETE_URL = (
+    "https://www.reddit.com/api/subreddit_autocomplete_v2.json"
+)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def live_subreddit_suggestions(searchterm):
+    query = (searchterm or "").strip().removeprefix("r/")
+
+    if len(query) < 2:
+        return []
+
+    try:
+        response = requests.get(
+            REDDIT_SUBREDDIT_AUTOCOMPLETE_URL,
+            params={
+                "query": query,
+                "include_over_18": "on",
+                "include_profiles": "off",
+                "raw_json": 1,
+            },
+            headers={
+                "User-Agent": (
+                    "Private Streamlit Reddit "
+                    "research extractor/2.1"
+                )
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+
+    children = (
+        payload.get("data", {}).get("children", [])
+        if isinstance(payload, dict)
+        else []
+    )
+
+    suggestions = []
+    seen = set()
+
+    for child in children:
+        data = child.get("data", {}) if isinstance(child, dict) else {}
+        name = str(data.get("display_name") or "").strip()
+
+        if not name or name.lower() in seen:
+            continue
+
+        seen.add(name.lower())
+        subscribers = data.get("subscribers")
+        title = str(data.get("title") or "").strip()
+
+        label = f"r/{name}"
+        if subscribers is not None:
+            try:
+                label += f" · {int(subscribers):,} members"
+            except (TypeError, ValueError):
+                pass
+        if title:
+            label += f" · {title}"
+
+        suggestions.append((label, name))
+
+    return suggestions[:20]
 
 
 def parse_csv(value):
@@ -1012,16 +1080,49 @@ delay = st.number_input(
 
 
 if mode == "Subreddit extraction":
+    if "selected_subreddits" not in st.session_state:
+        st.session_state.selected_subreddits = ["i130suffering"]
+
+    selected_subreddit = st_searchbox(
+        live_subreddit_suggestions,
+        label="Find subreddit",
+        placeholder="Start typing a subreddit name...",
+        key="live_subreddit_search",
+        debounce=300,
+        clear_on_submit=True,
+    )
+
+    if (
+        selected_subreddit
+        and selected_subreddit
+        not in st.session_state.selected_subreddits
+    ):
+        st.session_state.selected_subreddits.append(
+            selected_subreddit
+        )
+
+    selected_subreddits = st.multiselect(
+        "Subreddit(s) to scrape",
+        options=st.session_state.selected_subreddits,
+        default=st.session_state.selected_subreddits,
+        help=(
+            "Type above to get live Reddit suggestions. "
+            "Remove a selected subreddit here if needed."
+        ),
+    )
+    st.session_state.selected_subreddits = selected_subreddits
+
+    manual_subreddits_text = st.text_input(
+        "Manual subreddit(s) fallback (optional)",
+        help=(
+            "Comma-separated subreddit names. Use this only if "
+            "live suggestions are unavailable or a subreddit is missing."
+        ),
+    )
+
     with st.form(
         "subreddit_form"
     ):
-        subreddits_text = (
-            st.text_input(
-                "Subreddit(s)",
-                value="i130suffering",
-            )
-        )
-
         comment_limit = (
             st.number_input(
                 "Comments per subreddit",
@@ -1063,11 +1164,21 @@ if mode == "Subreddit extraction":
         )
 
     if submitted:
-        subreddits = (
-            parse_subreddits(
-                subreddits_text
-            )
+        manual_subreddits = parse_subreddits(
+            manual_subreddits_text
         )
+        subreddits = []
+        seen_subreddits = set()
+
+        for subreddit in (
+            selected_subreddits
+            + manual_subreddits
+        ):
+            clean_name = str(subreddit).strip().removeprefix("r/")
+            key = clean_name.lower()
+            if clean_name and key not in seen_subreddits:
+                seen_subreddits.add(key)
+                subreddits.append(clean_name)
 
         if not subreddits:
             st.error(
