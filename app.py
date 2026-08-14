@@ -37,6 +37,25 @@ PULLPUSH_POSTS_URL = (
     "https://api.pullpush.io/reddit/search/submission/"
 )
 
+SAVED_SUBREDDITS = [
+    "i130suffering",
+    "ClaudeAI",
+    "ChatGPT",
+    "GeminiAI",
+    "ArtificialInteligence",
+    "MachineLearning",
+    "LocalLLaMA",
+    "OpenAI",
+    "technology",
+    "personalfinance",
+    "personalfinancecanada",
+    "USC",
+    "VeteransBenefits",
+    "AsianMasculinity",
+    "SGV",
+    "Dollarama",
+]
+
 
 def parse_csv(value):
     seen = set()
@@ -1013,11 +1032,20 @@ delay = st.number_input(
 
 if mode == "Subreddit extraction":
     with st.form("subreddit_form"):
-        subreddits_text = st.text_input(
-            "Subreddit(s)",
-            value="i130suffering",
+        saved_subreddits = st.multiselect(
+            "Saved subreddit suggestions",
+            options=SAVED_SUBREDDITS,
+            default=["i130suffering"],
             help=(
-                "Enter one or more subreddit names separated by commas. "
+                "Choose from a temporary local list while Reddit API "
+                "approval is pending. Type in this box to filter the list."
+            ),
+        )
+
+        manual_subreddits_text = st.text_input(
+            "Other subreddit(s) (optional)",
+            help=(
+                "Enter additional subreddit names separated by commas. "
                 "You can paste names with or without r/."
             ),
         )
@@ -1063,9 +1091,22 @@ if mode == "Subreddit extraction":
         )
 
     if submitted:
-        subreddits = parse_subreddits(
-            subreddits_text
+        manual_subreddits = parse_subreddits(
+            manual_subreddits_text
         )
+        subreddits = []
+        seen_subreddits = set()
+
+        for subreddit in (
+            saved_subreddits
+            + manual_subreddits
+        ):
+            clean_name = str(subreddit).strip().removeprefix("r/")
+            key = clean_name.lower()
+
+            if clean_name and key not in seen_subreddits:
+                seen_subreddits.add(key)
+                subreddits.append(clean_name)
 
         if not subreddits:
             st.error(
