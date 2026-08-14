@@ -50,6 +50,10 @@ REDDIT_SUBREDDIT_NAMES_URL = (
     "https://www.reddit.com/api/search_reddit_names.json"
 )
 
+ARCTIC_SUBREDDIT_SEARCH_URL = (
+    "https://arctic-shift.photon-reddit.com/api/subreddits/search"
+)
+
 
 def _subreddit_suggestion_rows(children):
     suggestions = []
@@ -176,9 +180,43 @@ def live_subreddit_suggestions(searchterm):
             f"name search {type(exc).__name__}"
         )
 
+    try:
+        response = requests.get(
+            ARCTIC_SUBREDDIT_SEARCH_URL,
+            params={
+                "subreddit_prefix": query,
+                "limit": 20,
+                "sort_type": "subscribers",
+                "sort": "desc",
+                "fields": "display_name,title,subscribers",
+            },
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        records = (
+            payload.get("data", [])
+            if isinstance(payload, dict)
+            else []
+        )
+        children = [
+            {"data": record}
+            for record in records
+            if isinstance(record, dict)
+        ]
+        suggestions = _subreddit_suggestion_rows(children)
+        if suggestions:
+            return suggestions
+        errors.append("Arctic Shift returned 0")
+    except Exception as exc:
+        errors.append(
+            f"Arctic Shift {type(exc).__name__}"
+        )
+
     diagnostic = "; ".join(errors)
     return [(
-        f"No live matches for '{query}' ({diagnostic})",
+        f"No matches for '{query}' ({diagnostic})",
         "",
     )]
 
