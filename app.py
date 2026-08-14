@@ -8,7 +8,6 @@ import requests
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
-from streamlit_searchbox import st_searchbox
 
 
 st.set_page_config(
@@ -37,188 +36,6 @@ PULLPUSH_COMMENTS_URL = (
 PULLPUSH_POSTS_URL = (
     "https://api.pullpush.io/reddit/search/submission/"
 )
-
-REDDIT_SUBREDDIT_AUTOCOMPLETE_URL = (
-    "https://www.reddit.com/api/subreddit_autocomplete_v2.json"
-)
-
-REDDIT_SUBREDDIT_SEARCH_URL = (
-    "https://www.reddit.com/subreddits/search.json"
-)
-
-REDDIT_SUBREDDIT_NAMES_URL = (
-    "https://www.reddit.com/api/search_reddit_names.json"
-)
-
-ARCTIC_SUBREDDIT_SEARCH_URL = (
-    "https://arctic-shift.photon-reddit.com/api/subreddits/search"
-)
-
-
-def _subreddit_suggestion_rows(children):
-    suggestions = []
-    seen = set()
-
-    for child in children:
-        data = child.get("data", {}) if isinstance(child, dict) else {}
-        name = str(data.get("display_name") or "").strip()
-
-        if not name or name.lower() in seen:
-            continue
-
-        seen.add(name.lower())
-        subscribers = data.get("subscribers")
-        title = str(data.get("title") or "").strip()
-
-        label = f"r/{name}"
-        if subscribers is not None:
-            try:
-                label += f" · {int(subscribers):,} members"
-            except (TypeError, ValueError):
-                pass
-        if title:
-            label += f" · {title}"
-
-        suggestions.append((label, name))
-
-    return suggestions[:20]
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def live_subreddit_suggestions(searchterm):
-    query = (searchterm or "").strip().removeprefix("r/")
-
-    if len(query) < 2:
-        return []
-
-    headers = {
-        "User-Agent": (
-            "Private Streamlit Reddit "
-            "research extractor/2.2"
-        ),
-        "Accept": "application/json",
-    }
-    errors = []
-
-    try:
-        response = requests.get(
-            REDDIT_SUBREDDIT_AUTOCOMPLETE_URL,
-            params={
-                "query": query,
-                "include_over_18": "on",
-                "include_profiles": "off",
-                "raw_json": 1,
-            },
-            headers=headers,
-            timeout=10,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        suggestions = _subreddit_suggestion_rows(
-            payload.get("data", {}).get("children", [])
-        )
-        if suggestions:
-            return suggestions
-        errors.append("autocomplete returned 0")
-    except Exception as exc:
-        errors.append(
-            f"autocomplete {type(exc).__name__}"
-        )
-
-    try:
-        response = requests.get(
-            REDDIT_SUBREDDIT_SEARCH_URL,
-            params={
-                "q": query,
-                "limit": 20,
-                "raw_json": 1,
-            },
-            headers=headers,
-            timeout=10,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        suggestions = _subreddit_suggestion_rows(
-            payload.get("data", {}).get("children", [])
-        )
-        if suggestions:
-            return suggestions
-        errors.append("search returned 0")
-    except Exception as exc:
-        errors.append(
-            f"search {type(exc).__name__}"
-        )
-
-    try:
-        response = requests.post(
-            REDDIT_SUBREDDIT_NAMES_URL,
-            data={
-                "query": query,
-                "exact": "false",
-                "include_over_18": "on",
-            },
-            headers=headers,
-            timeout=10,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        names = (
-            payload.get("names", [])
-            if isinstance(payload, dict)
-            else []
-        )
-        suggestions = [
-            (f"r/{name}", name)
-            for name in names
-            if str(name).strip()
-        ][:20]
-        if suggestions:
-            return suggestions
-        errors.append("name search returned 0")
-    except Exception as exc:
-        errors.append(
-            f"name search {type(exc).__name__}"
-        )
-
-    try:
-        response = requests.get(
-            ARCTIC_SUBREDDIT_SEARCH_URL,
-            params={
-                "subreddit_prefix": query,
-                "limit": 20,
-                "sort_type": "subscribers",
-                "sort": "desc",
-                "fields": "display_name,title,subscribers",
-            },
-            headers=headers,
-            timeout=10,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        records = (
-            payload.get("data", [])
-            if isinstance(payload, dict)
-            else []
-        )
-        children = [
-            {"data": record}
-            for record in records
-            if isinstance(record, dict)
-        ]
-        suggestions = _subreddit_suggestion_rows(children)
-        if suggestions:
-            return suggestions
-        errors.append("Arctic Shift returned 0")
-    except Exception as exc:
-        errors.append(
-            f"Arctic Shift {type(exc).__name__}"
-        )
-
-    diagnostic = "; ".join(errors)
-    return [(
-        f"No matches for '{query}' ({diagnostic})",
-        "",
-    )]
 
 
 def parse_csv(value):
@@ -1195,49 +1012,16 @@ delay = st.number_input(
 
 
 if mode == "Subreddit extraction":
-    if "selected_subreddits" not in st.session_state:
-        st.session_state.selected_subreddits = ["i130suffering"]
-
-    selected_subreddit = st_searchbox(
-        live_subreddit_suggestions,
-        label="Find subreddit",
-        placeholder="Start typing a subreddit name...",
-        key="live_subreddit_search",
-        debounce=300,
-        clear_on_submit=True,
-    )
-
-    if (
-        selected_subreddit
-        and selected_subreddit
-        not in st.session_state.selected_subreddits
-    ):
-        st.session_state.selected_subreddits.append(
-            selected_subreddit
+    with st.form("subreddit_form"):
+        subreddits_text = st.text_input(
+            "Subreddit(s)",
+            value="i130suffering",
+            help=(
+                "Enter one or more subreddit names separated by commas. "
+                "You can paste names with or without r/."
+            ),
         )
 
-    selected_subreddits = st.multiselect(
-        "Subreddit(s) to scrape",
-        options=st.session_state.selected_subreddits,
-        default=st.session_state.selected_subreddits,
-        help=(
-            "Type above to get live Reddit suggestions. "
-            "Remove a selected subreddit here if needed."
-        ),
-    )
-    st.session_state.selected_subreddits = selected_subreddits
-
-    manual_subreddits_text = st.text_input(
-        "Manual subreddit(s) fallback (optional)",
-        help=(
-            "Comma-separated subreddit names. Use this only if "
-            "live suggestions are unavailable or a subreddit is missing."
-        ),
-    )
-
-    with st.form(
-        "subreddit_form"
-    ):
         comment_limit = (
             st.number_input(
                 "Comments per subreddit",
@@ -1279,21 +1063,9 @@ if mode == "Subreddit extraction":
         )
 
     if submitted:
-        manual_subreddits = parse_subreddits(
-            manual_subreddits_text
+        subreddits = parse_subreddits(
+            subreddits_text
         )
-        subreddits = []
-        seen_subreddits = set()
-
-        for subreddit in (
-            selected_subreddits
-            + manual_subreddits
-        ):
-            clean_name = str(subreddit).strip().removeprefix("r/")
-            key = clean_name.lower()
-            if clean_name and key not in seen_subreddits:
-                seen_subreddits.add(key)
-                subreddits.append(clean_name)
 
         if not subreddits:
             st.error(
