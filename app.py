@@ -38,21 +38,32 @@ PULLPUSH_POSTS_URL = (
 )
 
 SAVED_SUBREDDITS = [
-    "i130suffering",
-    "ClaudeAI",
-    "ChatGPT",
-    "GeminiAI",
-    "ArtificialInteligence",
-    "MachineLearning",
-    "OpenAI",
-    "Excel",
-    "personalfinance",
-    "personalfinancecanada",
-    "USC",
-    "VeteransBenefits",
+    "I130Suffering",
+    "ADHD",
+    "Anki",
     "AsianMasculinity",
-    "SGV",
-    "Dollarama",
+    "AskMen",
+    "bodyweightfitness",
+    "ChatGPT",
+    "churningcanada",
+    "ClaudeAI",
+    "CleaningTips",
+    "dollarama",
+    "excel",
+    "GeminiAI",
+    "GoogleAIStudio",
+    "LifeProTips",
+    "MorpheApp",
+    "PersonalFinanceCanada",
+    "popheads",
+    "povertyfinancecanada",
+    "PowerShell",
+    "sgv",
+    "TechnologyProTips",
+    "USC",
+    "USExpatTaxes",
+    "VeteransBenefits",
+    "YouShouldKnow",
 ]
 
 
@@ -662,7 +673,10 @@ def posts_dataframe(session, post_ids):
 
 mode = st.selectbox(
     "Mode",
-    ["Subreddit extraction", "Keyword search"],
+    [
+        "Subreddit extraction",
+        "Keyword search",
+    ],
 )
 
 sheet_name = st.text_input(
@@ -684,7 +698,7 @@ if mode == "Subreddit extraction":
         saved_subreddits = st.multiselect(
             "Saved subreddit suggestions",
             options=SAVED_SUBREDDITS,
-            default=["i130suffering"],
+            default=["I130Suffering"],
             help=(
                 "Choose from a temporary local list while Reddit API "
                 "approval is pending. Type in this box to filter the list."
@@ -709,7 +723,10 @@ if mode == "Subreddit extraction":
 
         fetch_direction = st.selectbox(
             "Which comments to collect",
-            ["Newest available", "Oldest available"],
+            [
+                "Newest available",
+                "Oldest available",
+            ],
         )
 
         output_sort = st.selectbox(
@@ -737,9 +754,13 @@ if mode == "Subreddit extraction":
         subreddits = []
         seen_subreddits = set()
 
-        for subreddit in saved_subreddits + manual_subreddits:
+        for subreddit in (
+            saved_subreddits
+            + manual_subreddits
+        ):
             clean_name = str(subreddit).strip().removeprefix("r/")
             key = clean_name.lower()
+
             if clean_name and key not in seen_subreddits:
                 seen_subreddits.add(key)
                 subreddits.append(clean_name)
@@ -751,348 +772,327 @@ if mode == "Subreddit extraction":
         client = sheets_client()
         try:
             spreadsheet = client.open(sheet_name)
-        except gspread.SpreadsheetNotFound:
-            st.error(
-                "Create the Google Sheet first, share it with the service-account email as Editor, then use that exact sheet name."
-            )
+        except (
+            gspread.SpreadsheetNotFound,
+            gspread.exceptions.APIError,
+        ) as exc:
+            st.error(f"Could not open Google Sheet: {exc}")
             st.stop()
 
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Private Streamlit Reddit research extractor/2.1"
-            )
-        })
+        all_comments = []
 
         status = st.empty()
         progress = st.progress(0.0)
 
-        try:
-            all_comments = []
-            for subreddit in subreddits:
-                all_comments.extend(
-                    download_subreddit_comments(
-                        session,
-                        subreddit,
-                        int(comment_limit),
-                        (
-                            "newest"
-                            if fetch_direction == "Newest available"
-                            else "oldest"
-                        ),
-                        float(delay),
-                        status,
-                        progress,
-                    )
-                )
+        direction = (
+            "newest"
+            if fetch_direction == "Newest available"
+            else "oldest"
+        )
 
-            unique = {
-                str(item.get("id")): item
-                for item in all_comments
-            }
-            comments_df = comments_dataframe(
-                list(unique.values()),
-                output_sort,
+        for index, subreddit in enumerate(subreddits, start=1):
+            status.info(
+                f"Downloading r/{subreddit} ({index}/{len(subreddits)})"
             )
-            post_ids = (
-                set(comments_df["post_id"].dropna().astype(str))
-                if not comments_df.empty
-                else set()
-            )
+            progress.progress((index - 1) / len(subreddits))
 
-            status.info("Retrieving post titles and post content...")
-            posts_df = posts_dataframe(session, post_ids)
+            comments = download_subreddit_comments(
+                session,
+                subreddit,
+                int(comment_limit),
+                direction,
+                float(delay),
+                status,
+                progress,
+            )
+            all_comments.extend(comments)
 
-            write_tab(spreadsheet, "Comments", comments_df)
-            write_tab(spreadsheet, "Posts", posts_df)
+        comments_df = comments_dataframe(
+            all_comments,
+            output_sort,
+        )
 
-            progress.progress(1.0)
-            status.success(
-                f"Finished: {len(comments_df):,} comments and {len(posts_df):,} posts."
-            )
-            st.link_button(
-                "Open Google Sheet",
-                spreadsheet.url,
-                use_container_width=True,
-            )
-        except Exception as exc:
-            status.error(
-                "The extraction stopped because of an error."
-            )
-            st.exception(exc)
+        post_ids = (
+            comments_df["post_id"].dropna().tolist()
+            if not comments_df.empty
+            else []
+        )
+        posts_df = posts_dataframe(session, post_ids)
+
+        write_tab(
+            spreadsheet,
+            "Comments",
+            comments_df,
+            append=False,
+            dedupe_columns=["comment_id"],
+        )
+        write_tab(
+            spreadsheet,
+            "Posts",
+            posts_df,
+            append=False,
+            dedupe_columns=["post_id"],
+        )
+
+        progress.progress(1.0)
+        status.success(
+            f"Done: saved {len(comments_df):,} comments "
+            f"and {len(posts_df):,} posts."
+        )
+        st.dataframe(comments_df.head(100), use_container_width=True)
 
 
 else:
-    with st.form("keyword_form"):
-        patterns_text = st.text_area(
-            "Keywords or wildcard patterns",
-            value="case was approved",
-            help=(
-                "Enter one keyword, phrase, or wildcard pattern per line."
-            ),
-        )
+    search_in = st.selectbox(
+        "Search in",
+        [
+            "Posts and comments",
+            "Posts",
+            "Comments",
+        ],
+    )
 
-        match_mode = st.selectbox(
-            "Match mode",
-            [
-                "Any keyword",
-                "All keywords",
-                "Exact phrase",
-                "Wildcard patterns",
-            ],
-        )
+    subreddits_text = st.text_input(
+        "Subreddit(s) (optional)",
+        help=(
+            "Comma-separated. Leave blank to search all Reddit."
+        ),
+    )
 
+    query_text = st.text_input(
+        "Keyword(s) or pattern(s)",
+        value="case was approved",
+    )
+
+    match_mode = st.selectbox(
+        "Match mode",
+        [
+            "Any keyword",
+            "All keywords",
+            "Exact phrase",
+            "Wildcard patterns",
+        ],
+        index=2,
+    )
+
+    wildcard_logic = "Any pattern"
+    if match_mode == "Wildcard patterns":
         wildcard_logic = st.selectbox(
-            "Wildcard pattern logic",
-            ["Any pattern", "All patterns"],
-            disabled=(match_mode != "Wildcard patterns"),
-        )
-
-        search_in = st.selectbox(
-            "Search in",
+            "Wildcard logic",
             [
-                "Posts and comments",
-                "Posts only",
-                "Comments only",
+                "Any pattern",
+                "All patterns",
             ],
         )
-
-        subreddits_text = st.text_input(
-            "Subreddits (optional)",
-            help=(
-                "Leave blank to search across all indexed subreddits. "
-                "Separate several names with commas."
-            ),
+        st.caption(
+            "Wildcard rules: * = zero or more characters, "
+            "? = exactly one character."
         )
 
+    today = date.today()
+    date_col1, date_col2 = st.columns(2)
+    with date_col1:
         date_from = st.date_input(
             "Date from",
-            value=date(2020, 1, 1),
+            value=date(2005, 6, 23),
+            min_value=date(2005, 6, 23),
+            max_value=today,
         )
+    with date_col2:
         date_to = st.date_input(
             "Date to",
-            value=date.today(),
+            value=today,
+            min_value=date(2005, 6, 23),
+            max_value=today,
         )
 
-        maximum_results = st.number_input(
-            "Maximum matching results",
-            min_value=1,
-            max_value=10000,
-            value=500,
-            step=50,
-        )
+    max_results = st.number_input(
+        "Maximum matching results",
+        min_value=1,
+        max_value=100000,
+        value=1000,
+        step=100,
+    )
 
-        candidate_limit = st.number_input(
-            "Maximum server search candidates",
-            min_value=100,
-            max_value=20000,
-            value=2000,
-            step=100,
-        )
+    candidate_limit = st.number_input(
+        "Maximum server search candidates",
+        min_value=100,
+        max_value=100000,
+        value=5000,
+        step=100,
+        help=(
+            "The app asks the archive for up to this many candidates, "
+            "then applies your exact match rules locally."
+        ),
+    )
 
-        search_order = st.selectbox(
-            "Search order",
-            ["Newest first", "Oldest first"],
-        )
+    order = st.selectbox(
+        "Search order",
+        [
+            "Newest first",
+            "Oldest first",
+        ],
+    )
 
-        save_mode = st.selectbox(
-            "Save mode",
-            [
-                "Replace previous search results",
-                "Append to existing search results",
-            ],
-        )
+    save_mode = st.selectbox(
+        "Save mode",
+        [
+            "Replace Search Results",
+            "Append to Search Results",
+        ],
+    )
 
-        submitted = st.form_submit_button(
-            "Start keyword search",
-            type="primary",
-            use_container_width=True,
-        )
+    search_submitted = st.button(
+        "Start keyword search",
+        type="primary",
+        use_container_width=True,
+    )
 
-    if submitted:
-        patterns = [
-            item.strip()
-            for item in patterns_text.splitlines()
-            if item.strip()
-        ]
+    if search_submitted:
+        patterns = parse_csv(query_text)
+        subreddits = parse_subreddits(subreddits_text)
 
         if not patterns:
-            st.error("Enter at least one keyword or wildcard pattern.")
-            st.stop()
-
-        if match_mode == "Exact phrase" and len(patterns) > 1:
-            st.error("Exact phrase mode accepts one phrase only.")
+            st.error("Enter at least one keyword or pattern.")
             st.stop()
 
         if date_from > date_to:
             st.error("Date from must be on or before Date to.")
             st.stop()
 
+        after = unix_start(date_from)
+        before = unix_end(date_to)
+
+        server_query = (
+            patterns[0]
+            if match_mode in (
+                "Exact phrase",
+                "Wildcard patterns",
+            )
+            else " ".join(patterns)
+        )
+
         client = sheets_client()
         try:
             spreadsheet = client.open(sheet_name)
-        except gspread.SpreadsheetNotFound:
-            st.error(
-                "Create the Google Sheet first, share it with the service-account email as Editor, then use that exact sheet name."
-            )
+        except (
+            gspread.SpreadsheetNotFound,
+            gspread.exceptions.APIError,
+        ) as exc:
+            st.error(f"Could not open Google Sheet: {exc}")
             st.stop()
 
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Private Streamlit Reddit research extractor/2.1"
-            )
-        })
         status = st.empty()
+        search_rows = []
 
-        try:
-            subreddits = parse_subreddits(subreddits_text)
-            scopes = subreddits or [None]
+        targets = subreddits if subreddits else [None]
+        endpoint_specs = []
 
-            query_seed = (
-                patterns[0]
-                .replace("*", " ")
-                .replace("?", " ")
-                .strip()
+        if search_in in (
+            "Posts and comments",
+            "Posts",
+        ):
+            endpoint_specs.append(
+                (PULLPUSH_POSTS_URL, "post")
             )
-            query_seed = query_seed or patterns[0]
 
-            after = unix_start(date_from)
-            before = unix_end(date_to)
+        if search_in in (
+            "Posts and comments",
+            "Comments",
+        ):
+            endpoint_specs.append(
+                (PULLPUSH_COMMENTS_URL, "comment")
+            )
 
-            all_rows = []
-            total_candidates = 0
-
-            for subreddit in scopes:
-                if search_in in (
-                    "Posts and comments",
-                    "Posts only",
-                ):
-                    candidates = pullpush_search(
-                        session,
-                        PULLPUSH_POSTS_URL,
-                        query_seed,
-                        subreddit,
-                        after,
-                        before,
-                        search_order,
-                        int(candidate_limit),
-                        status,
-                    )
-                    total_candidates += len(candidates)
-                    all_rows.extend(
-                        normalize_search_results(
-                            candidates,
-                            "post",
-                            patterns,
-                            match_mode,
-                            wildcard_logic,
-                        )
-                    )
-
-                if search_in in (
-                    "Posts and comments",
-                    "Comments only",
-                ):
-                    candidates = pullpush_search(
-                        session,
-                        PULLPUSH_COMMENTS_URL,
-                        query_seed,
-                        subreddit,
-                        after,
-                        before,
-                        search_order,
-                        int(candidate_limit),
-                        status,
-                    )
-                    total_candidates += len(candidates)
-                    all_rows.extend(
-                        normalize_search_results(
-                            candidates,
-                            "comment",
-                            patterns,
-                            match_mode,
-                            wildcard_logic,
-                        )
-                    )
-
-            results_df = pd.DataFrame(all_rows)
-            if not results_df.empty:
-                results_df = (
-                    results_df
-                    .drop_duplicates(
-                        subset=[
-                            "result_type",
-                            "post_id",
-                            "comment_id",
-                        ]
-                    )
-                    .sort_values(
-                        "created_utc",
-                        ascending=(search_order == "Oldest first"),
-                    )
-                    .head(int(maximum_results))
+        for subreddit in targets:
+            for endpoint, result_type in endpoint_specs:
+                label = subreddit or "all Reddit"
+                status.info(
+                    f"Searching {result_type}s in {label}..."
                 )
 
-            append = (
-                save_mode == "Append to existing search results"
-            )
+                items = pullpush_search(
+                    session,
+                    endpoint,
+                    server_query,
+                    subreddit,
+                    after,
+                    before,
+                    order,
+                    int(candidate_limit),
+                    status,
+                )
 
-            write_tab(
-                spreadsheet,
-                "Search Results",
-                results_df,
-                append=append,
-                dedupe_columns=[
+                search_rows.extend(
+                    normalize_search_results(
+                        items,
+                        result_type,
+                        patterns,
+                        match_mode,
+                        wildcard_logic,
+                    )
+                )
+
+                if len(search_rows) >= int(max_results):
+                    break
+            if len(search_rows) >= int(max_results):
+                break
+
+        results_df = pd.DataFrame(search_rows)
+        if not results_df.empty:
+            results_df = results_df.drop_duplicates(
+                subset=[
                     "result_type",
                     "post_id",
                     "comment_id",
-                ],
+                ]
             )
+            results_df = results_df.sort_values(
+                "created_utc",
+                ascending=(order == "Oldest first"),
+            ).head(int(max_results))
 
-            log_df = pd.DataFrame([
-                {
-                    "run_time_utc": datetime.now(
-                        timezone.utc
-                    ).isoformat(),
-                    "patterns": " | ".join(patterns),
-                    "match_mode": match_mode,
-                    "wildcard_logic": (
-                        wildcard_logic
-                        if match_mode == "Wildcard patterns"
-                        else ""
-                    ),
-                    "search_in": search_in,
-                    "subreddits": (
-                        ", ".join(subreddits)
-                        if subreddits
-                        else "ALL INDEXED SUBREDDITS"
-                    ),
-                    "date_from": str(date_from),
-                    "date_to": str(date_to),
-                    "server_candidates": total_candidates,
-                    "matches_saved": len(results_df),
-                    "save_mode": save_mode,
-                }
-            ])
+        append = save_mode == "Append to Search Results"
+        write_tab(
+            spreadsheet,
+            "Search Results",
+            results_df,
+            append=append,
+            dedupe_columns=[
+                "result_type",
+                "post_id",
+                "comment_id",
+            ],
+        )
 
-            write_tab(
-                spreadsheet,
-                "Search Log",
-                log_df,
-                append=True,
-            )
+        log_df = pd.DataFrame([{
+            "searched_at_utc": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "query": query_text,
+            "match_mode": match_mode,
+            "wildcard_logic": wildcard_logic,
+            "search_in": search_in,
+            "subreddits": ", ".join(subreddits),
+            "date_from": str(date_from),
+            "date_to": str(date_to),
+            "max_results": int(max_results),
+            "candidate_limit": int(candidate_limit),
+            "order": order,
+            "save_mode": save_mode,
+            "results_saved": len(results_df),
+        }])
 
-            status.success(
-                f"Finished: retrieved {total_candidates:,} server candidates and saved {len(results_df):,} matches."
-            )
-            st.link_button(
-                "Open Google Sheet",
-                spreadsheet.url,
-                use_container_width=True,
-            )
-        except Exception as exc:
-            status.error(
-                "The keyword search stopped because of an error."
-            )
-            st.exception(exc)
+        write_tab(
+            spreadsheet,
+            "Search Log",
+            log_df,
+            append=True,
+        )
+
+        status.success(
+            f"Done: saved {len(results_df):,} matching results."
+        )
+        st.dataframe(results_df.head(100), use_container_width=True)
