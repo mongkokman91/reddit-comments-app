@@ -4,4 +4,3 @@ pandas
 gspread
 gspread-dataframe
 google-auth
-streamlit-searchbox==0.1.24
