@@ -1,4 +1,6 @@
 import re
+import queue
+import threading
 from urllib.parse import urlparse, parse_qs
 
 import streamlit as st
@@ -81,6 +83,23 @@ def fetch_comments(video, replies, parents, order, log):
     return result.get("comments") or []
 
 
+def fetch_with_timeout(video, replies, parents, order, log):
+    result_queue = queue.Queue(maxsize=1)
+    def worker():
+        try:
+            result_queue.put((True, fetch_comments(video, replies, parents, order, log)))
+        except Exception as exc:
+            result_queue.put((False, exc))
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        ok, result = result_queue.get(timeout=90)
+    except queue.Empty:
+        raise RuntimeError("YouTube did not return comments within 90 seconds. The hosted server may be blocked. Try again later or try a different video.")
+    if not ok:
+        raise result
+    return result
+
+
 for key, default in {"yt_videos": [], "yt_comments": {}, "yt_errors": {}, "yt_done": [], "yt_job": None}.items():
     st.session_state.setdefault(key, default)
 
@@ -123,7 +142,7 @@ if st.session_state.pop("yt_run", False):
             status.info(f"Reading {index + 1}/{len(videos)}: {video['title']}")
             log = QuietLog()
             try:
-                comments = fetch_comments(video, *st.session_state.yt_job, log)
+                comments = fetch_with_timeout(video, *st.session_state.yt_job, log)
                 seen = set()
                 st.session_state.yt_comments[video["id"]] = [item for item in comments if item.get("id") and not (item["id"] in seen or seen.add(item["id"]))]
                 st.session_state.yt_done.append(video["id"])
