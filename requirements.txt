@@ -4,3 +4,4 @@ pandas
 gspread
 gspread-dataframe
 google-auth
+yt-dlp[default]>=2026.10.26
