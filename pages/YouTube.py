@@ -100,7 +100,24 @@ def fetch_with_timeout(video, replies, parents, order, log):
     return result
 
 
-for key, default in {"yt_videos": [], "yt_comments": {}, "yt_errors": {}, "yt_done": [], "yt_job": None}.items():
+def limit_comments(comments, parent_limit, reply_limit):
+    parents = [c for c in comments if c.get("parent") in (None, "root")]
+    if parent_limit:
+        parents = parents[:parent_limit]
+    parent_ids = {c["id"] for c in parents}
+    counts = {}
+    result = list(parents)
+    seen = set(parent_ids)
+    for comment in comments:
+        parent = comment.get("parent")
+        if parent in parent_ids and comment.get("id") not in seen and counts.get(parent, 0) < reply_limit:
+            result.append(comment)
+            seen.add(comment["id"])
+            counts[parent] = counts.get(parent, 0) + 1
+    return result
+
+
+for key, default in {"yt_videos": [], "yt_comments": {}, "yt_errors": {}, "yt_diagnostics": {}, "yt_done": [], "yt_job": None}.items():
     st.session_state.setdefault(key, default)
 
 with st.form("youtube_job"):
@@ -123,7 +140,7 @@ if start:
         if not videos:
             st.error("No videos found. Try a video URL or another search.")
         else:
-            st.session_state.update(yt_videos=videos, yt_comments={}, yt_errors={}, yt_done=[],
+            st.session_state.update(yt_videos=videos, yt_comments={}, yt_errors={}, yt_diagnostics={}, yt_done=[],
                                     yt_job=(int(replies), int(parents), "top" if order_label == "Top comments" else "new"))
             st.session_state["yt_run"] = True
     except Exception as exc:
@@ -144,18 +161,30 @@ if st.session_state.pop("yt_run", False):
             try:
                 comments = fetch_with_timeout(video, *st.session_state.yt_job, log)
                 seen = set()
-                st.session_state.yt_comments[video["id"]] = [item for item in comments if item.get("id") and not (item["id"] in seen or seen.add(item["id"]))]
+                unique = [item for item in comments if item.get("id") and not (item["id"] in seen or seen.add(item["id"]))]
+                st.session_state.yt_comments[video["id"]] = limit_comments(unique, st.session_state.yt_job[1], st.session_state.yt_job[0])
                 st.session_state.yt_done.append(video["id"])
                 st.session_state.yt_errors.pop(video["id"], None)
                 if log.warnings:
-                    st.session_state.yt_errors[video["id"]] = "Extraction warning: " + " | ".join(log.warnings)
+                    st.session_state.yt_diagnostics[video["id"]] = log.warnings
             except Exception as exc:
                 st.session_state.yt_errors[video["id"]] = str(exc)
         progress.progress((index + 1) / len(videos))
-    status.success("Finished reading available comments.")
+    if st.session_state.yt_errors:
+        status.warning(f"Finished with {len(st.session_state.yt_errors)} failed video(s). Available comments are shown below.")
+    else:
+        status.success("Comments loaded. Read and filter them below.")
 
 videos = st.session_state.yt_videos
 if videos:
+    # Enforce limits for results already held by an open session as well.
+    if st.session_state.yt_job:
+        for video_id, items in st.session_state.yt_comments.items():
+            st.session_state.yt_comments[video_id] = limit_comments(items, st.session_state.yt_job[1], st.session_state.yt_job[0])
+    for video_id, message in list(st.session_state.yt_errors.items()):
+        if message.startswith("Extraction warning:") and st.session_state.yt_comments.get(video_id):
+            st.session_state.yt_diagnostics[video_id] = [message]
+            del st.session_state.yt_errors[video_id]
     total = sum(len(items) for items in st.session_state.yt_comments.values())
     st.write(f"{total:,} comments and replies across {len(st.session_state.yt_done)} processed videos.")
     if st.button("Clear session results"):
@@ -168,6 +197,12 @@ if videos:
     st.link_button("Open video on YouTube", "https://www.youtube.com/watch?v=" + selected)
     if selected in st.session_state.yt_errors:
         st.warning(st.session_state.yt_errors[selected])
+    diagnostics = st.session_state.yt_diagnostics.get(selected, [])
+    if diagnostics:
+        with st.expander("Technical diagnostics"):
+            st.caption("These messages do not necessarily prevent comment retrieval. Video playback warnings can be ignored when comments are shown.")
+            for message in diagnostics:
+                st.text(message)
     query = st.text_input("Filter comment text or author")
     comments = st.session_state.yt_comments.get(selected, [])
     parents_by_id = {c["id"]: c for c in comments if c.get("parent") in (None, "root")}
